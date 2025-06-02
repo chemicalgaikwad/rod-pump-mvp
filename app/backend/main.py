@@ -1,0 +1,188 @@
+// File: app/backend/main.py
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from typing import Optional
+from pydantic import BaseModel
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import io
+import zipfile
+import os
+from fpdf import FPDF
+import re
+import joblib
+from sklearn.ensemble import RandomForestClassifier
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+EXPORT_DIR = "exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
+
+# --- Diagnostics Rules ---
+def detect_issue_patterns(df: pd.DataFrame):
+    issues = []
+    if df["Load"].max() < 200:
+        issues.append("Gas Interference")
+    if df["Load"].min() > 50:
+        issues.append("Tubing Leak")
+    if df["Load"].diff().abs().mean() > 100:
+        issues.append("Vibration Interference")
+    if df["Position"].iloc[-1] < df["Position"].max() * 0.75:
+        issues.append("Insufficient Inflow")
+    if df["Load"].std() < 20:
+        issues.append("Flowing with Pumping")
+    if df["Load"].iloc[0] < 50 and df["Load"].iloc[10] > 200:
+        issues.append("Gas Locking")
+    if df["Load"].rolling(5).mean().diff().abs().max() < 10:
+        issues.append("Traveling Valve Leaking")
+    if df["Load"].apply(lambda x: x > 500).sum() > 50:
+        issues.append("Heavy Oil Interference")
+    if df["Load"].diff().min() < -200:
+        issues.append("Sand Interference")
+    return issues
+
+# --- ML Diagnostics ---
+def extract_features(df: pd.DataFrame):
+    return pd.DataFrame.from_dict({
+        "load_mean": [df["Load"].mean()],
+        "load_std": [df["Load"].std()],
+        "load_max": [df["Load"].max()],
+        "load_min": [df["Load"].min()],
+        "position_range": [df["Position"].max() - df["Position"].min()],
+        "diff_mean": [df["Load"].diff().abs().mean()],
+    })
+
+def ml_predict_issue(df: pd.DataFrame):
+    features = extract_features(df)
+    model = joblib.load("ml_model.pkl")  # Pretrained model
+    preds = model.predict(features)
+    probs = model.predict_proba(features)
+    return preds[0], float(np.max(probs))
+
+# --- Efficiency & Rod String Analysis ---
+def calculate_efficiency_metrics(fillage, stroke_length, spm):
+    ideal_fill = 100
+    volumetric_eff = fillage / ideal_fill
+    system_eff = volumetric_eff * (stroke_length * spm) / 100
+    return {"volumetric_eff": volumetric_eff, "system_eff": system_eff}
+
+def parse_rod_string(rod_string):
+    pattern = r"(\d+\.\d+)x(\d+)"
+    rods = re.findall(pattern, rod_string)
+    parsed = [(float(dia), int(length)) for dia, length in rods]
+    total_weight = sum(dia**2 * length * 0.1 for dia, length in parsed)
+    return {"rod_config": parsed, "rod_total_weight": total_weight}
+
+# --- Optimizer ---
+def suggest_optimization(stroke_length, spm, rod_weight, fillage):
+    recommendations = []
+    if fillage < 80:
+        recommendations.append("Reduce stroke length or spm to avoid fluid pound")
+    if rod_weight > 10000:
+        recommendations.append("Consider rod changeout to reduce load")
+    if stroke_length > 120:
+        recommendations.append("Stroke length may be excessive, evaluate shorter stroke")
+    return recommendations
+
+# --- Dyno Sim & Metrics ---
+def calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string):
+    prhp = (rod_weight * stroke_length * spm) / 33000
+    fillage = 85.0
+    return {"prhp": prhp, "fillage": fillage}
+
+def generate_dyno_card(stroke_length, rod_weight):
+    position = np.linspace(0, stroke_length, 100)
+    load = rod_weight * np.sin(np.linspace(0, np.pi, 100))
+    return pd.DataFrame({"Position": position, "Load": load})
+
+# --- File I/O ---
+def parse_excel(file: UploadFile):
+    return pd.read_excel(file.file)
+
+def generate_csv(data: dict, filename: str):
+    df = pd.DataFrame([data])
+    csv_path = os.path.join(EXPORT_DIR, filename)
+    df.to_csv(csv_path, index=False)
+    return csv_path
+
+def generate_dyno_chart(df: pd.DataFrame, filename: str):
+    fig, ax = plt.subplots()
+    ax.plot(df["Position"], df["Load"])
+    ax.set_title("Dyno Card")
+    ax.set_xlabel("Position")
+    ax.set_ylabel("Load")
+    chart_path = os.path.join(EXPORT_DIR, filename)
+    fig.savefig(chart_path)
+    plt.close(fig)
+    return chart_path
+
+def generate_pdf(metrics: dict, chart_path: str, issues: list, suggestions: list, filename: str):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Pump Metrics", ln=True)
+    for k, v in metrics.items():
+        pdf.cell(200, 10, txt=f"{k}: {v:.2f}", ln=True)
+    pdf.cell(200, 10, txt="\nDetected Issues:", ln=True)
+    for issue in issues:
+        pdf.cell(200, 10, txt=f"- {issue}", ln=True)
+    pdf.cell(200, 10, txt="\nOptimization Suggestions:", ln=True)
+    for s in suggestions:
+        pdf.cell(200, 10, txt=f"- {s}", ln=True)
+    pdf.image(chart_path, x=10, y=120, w=180)
+    pdf_path = os.path.join(EXPORT_DIR, filename)
+    pdf.output(pdf_path)
+    return pdf_path
+
+# --- API ---
+@app.post("/api/calculate")
+async def calculate(
+    stroke_length: float = Form(...),
+    spm: float = Form(...),
+    rod_weight: float = Form(...),
+    pump_depth: float = Form(...),
+    fluid_level: Optional[float] = Form(None),
+    rod_string: str = Form(...),
+    surface_card_file: UploadFile = File(...),
+    downhole_card_file: UploadFile = File(...)
+):
+    surface_df = parse_excel(surface_card_file)
+    downhole_df = parse_excel(downhole_card_file)
+
+    base_metrics = calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string)
+    efficiency = calculate_efficiency_metrics(base_metrics["fillage"], stroke_length, spm)
+    rod_info = parse_rod_string(rod_string)
+    all_metrics = {**base_metrics, **efficiency, **rod_info}
+
+    sim_dyno_df = generate_dyno_card(stroke_length, rod_weight)
+    issues = detect_issue_patterns(downhole_df)
+    ml_issue, ml_conf = ml_predict_issue(downhole_df)
+    issues.append(f"ML Suggests: {ml_issue} ({ml_conf * 100:.1f}% confidence)")
+
+    suggestions = suggest_optimization(stroke_length, spm, rod_weight, base_metrics["fillage"])
+
+    # Save outputs
+    generate_csv(all_metrics, "metrics.csv")
+    chart_path = generate_dyno_chart(sim_dyno_df, "dyno_chart.png")
+    generate_pdf(all_metrics, chart_path, issues, suggestions, "report.pdf")
+
+    return {"metrics": all_metrics, "issues": issues, "suggestions": suggestions}
+
+@app.get("/api/export")
+def export():
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zipf:
+        for fname in ["metrics.csv", "report.pdf", "dyno_chart.png"]:
+            fpath = os.path.join(EXPORT_DIR, fname)
+            zipf.write(fpath, arcname=fname)
+    zip_buf.seek(0)
+    return FileResponse(zip_buf, media_type='application/zip', filename='report.zip')
