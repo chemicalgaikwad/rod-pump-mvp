@@ -1,4 +1,4 @@
-// File: app/backend/main.py
+# File: app/backend/main.py
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
