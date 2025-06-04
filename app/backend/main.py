@@ -102,11 +102,16 @@ def ml_predict_issue(df: pd.DataFrame):
     probs = ml_model.predict_proba(features)
     return preds[0], float(np.max(probs))
 
+# --- Dyno Metrics ---
+def calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string, downhole_df):
+    prhp = (rod_weight * stroke_length * spm) / 33000
+    load_range = downhole_df["Load"].max() - downhole_df["Load"].min()
+    fillage = min((load_range / rod_weight) * 100, 100) if rod_weight else 0
+    return {"prhp": prhp, "fillage": fillage}
+
 # --- Efficiency & Rod String Analysis ---
 def calculate_efficiency_metrics(fillage, stroke_length, spm):
-    volumetric_eff = fillage / 100
-    system_eff = volumetric_eff * (stroke_length * spm) / 100
-    return {"volumetric_eff": volumetric_eff, "system_eff": system_eff}
+    return {"volumetric_eff": fillage}
 
 def parse_rod_string(rod_string):
     rods = re.findall(r"(\d+\.\d+)x(\d+)", rod_string)
@@ -125,17 +130,6 @@ def suggest_optimization(stroke_length, spm, rod_weight, fillage):
         recommendations.append("Stroke length may be excessive, evaluate shorter stroke")
     return recommendations
 
-# --- Dyno Sim & Metrics ---
-def calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string):
-    prhp = (rod_weight * stroke_length * spm) / 33000
-    fillage = 85.0
-    return {"prhp": prhp, "fillage": fillage}
-
-def generate_dyno_card(stroke_length, rod_weight):
-    position = np.linspace(0, stroke_length, 100)
-    load = rod_weight * np.sin(np.linspace(0, np.pi, 100))
-    return pd.DataFrame({"Position": position, "Load": load})
-
 # --- File I/O ---
 def parse_excel(file: UploadFile):
     df = pd.read_excel(file.file)
@@ -147,31 +141,42 @@ def generate_csv(data: dict, filename: str):
     df.to_csv(path, index=False)
     return path
 
-def generate_dyno_chart(df: pd.DataFrame, filename: str):
-    fig, ax = plt.subplots()
-    ax.plot(df["Position"], df["Load"])
-    ax.set_title("Dyno Card")
-    ax.set_xlabel("Position")
-    ax.set_ylabel("Load")
+def generate_dyno_chart_combined(surface_df: pd.DataFrame, downhole_df: pd.DataFrame, filename: str):
+    fig, axs = plt.subplots(2, 1, figsize=(6, 8))
+
+    axs[0].plot(surface_df["Position"], surface_df["Load"], color='blue')
+    axs[0].set_title("Surface Dyno Card")
+    axs[0].set_xlabel("Position")
+    axs[0].set_ylabel("Load")
+
+    axs[1].plot(downhole_df["Position"], downhole_df["Load"], color='orange')
+    axs[1].set_title("Downhole Dyno Card")
+    axs[1].set_xlabel("Position")
+    axs[1].set_ylabel("Load")
+
+    plt.tight_layout()
     path = os.path.join(EXPORT_DIR, filename)
     fig.savefig(path)
     plt.close(fig)
     return path
 
-def generate_pdf(metrics: dict, chart_path: str, issues: list, suggestions: list, filename: str):
+def generate_pdf(metrics: dict, chart_paths: list, issues: list, suggestions: list, filename: str):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt="Pump Metrics", ln=True)
     for k, v in metrics.items():
-        pdf.cell(200, 10, txt=f"{k}: {v:.2f}" if isinstance(v, (int, float)) else f"{k}: {v}", ln=True)
+        pdf.cell(200, 10, txt=f"{k}: {v:.2f}%" if k == 'volumetric_eff' else (f"{k}: {v:.2f}" if isinstance(v, (int, float)) else f"{k}: {v}"), ln=True)
     pdf.cell(200, 10, txt="\nDetected Issues:", ln=True)
     for issue in issues:
         pdf.cell(200, 10, txt=f"- {issue}", ln=True)
     pdf.cell(200, 10, txt="\nOptimization Suggestions:", ln=True)
     for s in suggestions:
         pdf.cell(200, 10, txt=f"- {s}", ln=True)
-    pdf.image(chart_path, x=10, y=120, w=180)
+    for i, chart_path in enumerate(chart_paths):
+        if i > 0:
+            pdf.add_page()
+        pdf.image(chart_path, x=10, y=40, w=180)
     path = os.path.join(EXPORT_DIR, filename)
     pdf.output(path)
     return path
@@ -191,12 +196,11 @@ async def calculate(
     surface_df = parse_excel(surface_card_file)
     downhole_df = parse_excel(downhole_card_file)
 
-    base_metrics = calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string)
+    base_metrics = calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string, downhole_df)
     efficiency = calculate_efficiency_metrics(base_metrics["fillage"], stroke_length, spm)
     rod_info = parse_rod_string(rod_string)
     all_metrics = {**base_metrics, **efficiency, **rod_info}
 
-    sim_dyno_df = downhole_df
     issues = detect_issue_patterns(downhole_df)
     ml_issue, ml_conf = ml_predict_issue(downhole_df)
     issues.append(f"ML Suggests: {ml_issue} ({ml_conf * 100:.1f}% confidence)")
@@ -204,8 +208,9 @@ async def calculate(
     suggestions = suggest_optimization(stroke_length, spm, rod_weight, base_metrics["fillage"])
 
     generate_csv(all_metrics, "metrics.csv")
-    chart_path = generate_dyno_chart(sim_dyno_df, "dyno_chart.png")
-    generate_pdf(all_metrics, chart_path, issues, suggestions, "report.pdf")
+    combined_chart_path = generate_dyno_chart_combined(surface_df, downhole_df, "combined_dyno_chart.png")
+    
+    generate_pdf(all_metrics, [combined_chart_path], issues, suggestions, "report.pdf")
 
     return {"metrics": all_metrics, "issues": issues, "suggestions": suggestions}
 
@@ -213,9 +218,8 @@ async def calculate(
 def export():
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zipf:
-        for fname in ["metrics.csv", "report.pdf", "dyno_chart.png"]:
+        for fname in ["metrics.csv", "report.pdf", "combined_dyno_chart.png"]:
             path = os.path.join(EXPORT_DIR, fname)
             zipf.write(path, arcname=fname)
-    zip_buf.seek(0)
     zip_buf.seek(0)
     return StreamingResponse(zip_buf, media_type='application/zip', headers={"Content-Disposition": "attachment; filename=report.zip"})
