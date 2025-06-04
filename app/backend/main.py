@@ -103,14 +103,15 @@ def ml_predict_issue(df: pd.DataFrame):
     return preds[0], float(np.max(probs))
 
 # --- Dyno Metrics ---
-def calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string, downhole_df):
+def calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df):
+    stroke_length = surface_df["Position"].max() - surface_df["Position"].min()
     prhp = (rod_weight * stroke_length * spm) / 33000
     load_range = downhole_df["Load"].max() - downhole_df["Load"].min()
     fillage = min((load_range / rod_weight) * 100, 100) if rod_weight else 0
-    return {"prhp": prhp, "fillage": fillage}
+    return {"stroke_length": stroke_length, "prhp": prhp, "fillage": fillage}
 
 # --- Efficiency & Rod String Analysis ---
-def calculate_efficiency_metrics(fillage, stroke_length, spm):
+def calculate_efficiency_metrics(fillage):
     return {"volumetric_eff": fillage}
 
 def parse_rod_string(rod_string):
@@ -119,7 +120,7 @@ def parse_rod_string(rod_string):
     total_weight = sum(d**2 * l * 0.1 for d, l in parsed)
     return {"rod_config": parsed, "rod_total_weight": total_weight}
 
-# --- Optimizer ---
+# --- Optimization ---
 def suggest_optimization(stroke_length, spm, rod_weight, fillage):
     recommendations = []
     if fillage < 80:
@@ -128,7 +129,8 @@ def suggest_optimization(stroke_length, spm, rod_weight, fillage):
         recommendations.append("Consider rod changeout to reduce load")
     if stroke_length > 120:
         recommendations.append("Stroke length may be excessive, evaluate shorter stroke")
-    return recommendations
+    recommended_stroke = max(min(120, stroke_length * (fillage / 100)), 60)
+    return recommendations, recommended_stroke
 
 # --- File I/O ---
 def parse_excel(file: UploadFile):
@@ -148,11 +150,13 @@ def generate_dyno_chart_combined(surface_df: pd.DataFrame, downhole_df: pd.DataF
     axs[0].set_title("Surface Dyno Card")
     axs[0].set_xlabel("Position")
     axs[0].set_ylabel("Load")
+    axs[0].grid(True)
 
     axs[1].plot(downhole_df["Position"], downhole_df["Load"], color='orange')
     axs[1].set_title("Downhole Dyno Card")
     axs[1].set_xlabel("Position")
     axs[1].set_ylabel("Load")
+    axs[1].grid(True)
 
     plt.tight_layout()
     path = os.path.join(EXPORT_DIR, filename)
@@ -184,7 +188,6 @@ def generate_pdf(metrics: dict, chart_paths: list, issues: list, suggestions: li
 # --- API ---
 @app.post("/api/calculate")
 async def calculate(
-    stroke_length: float = Form(...),
     spm: float = Form(...),
     rod_weight: float = Form(...),
     pump_depth: float = Form(...),
@@ -196,20 +199,19 @@ async def calculate(
     surface_df = parse_excel(surface_card_file)
     downhole_df = parse_excel(downhole_card_file)
 
-    base_metrics = calculate_metrics(stroke_length, spm, rod_weight, pump_depth, fluid_level, rod_string, downhole_df)
-    efficiency = calculate_efficiency_metrics(base_metrics["fillage"], stroke_length, spm)
+    base_metrics = calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df)
+    efficiency = calculate_efficiency_metrics(base_metrics["fillage"])
     rod_info = parse_rod_string(rod_string)
-    all_metrics = {**base_metrics, **efficiency, **rod_info}
+    suggestions, recommended_stroke = suggest_optimization(base_metrics["stroke_length"], spm, rod_weight, base_metrics["fillage"])
+    
+    all_metrics = {**base_metrics, **efficiency, **rod_info, "recommended_stroke_length": recommended_stroke}
 
     issues = detect_issue_patterns(downhole_df)
     ml_issue, ml_conf = ml_predict_issue(downhole_df)
     issues.append(f"ML Suggests: {ml_issue} ({ml_conf * 100:.1f}% confidence)")
 
-    suggestions = suggest_optimization(stroke_length, spm, rod_weight, base_metrics["fillage"])
-
     generate_csv(all_metrics, "metrics.csv")
     combined_chart_path = generate_dyno_chart_combined(surface_df, downhole_df, "combined_dyno_chart.png")
-    
     generate_pdf(all_metrics, [combined_chart_path], issues, suggestions, "report.pdf")
 
     return {"metrics": all_metrics, "issues": issues, "suggestions": suggestions}
