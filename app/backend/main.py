@@ -1,4 +1,4 @@
-# File: app/backend/main.py
+#File: app/backend/main.py
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -26,6 +26,20 @@ app.add_middleware(
 
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
+
+# --- Column Mapping Logic ---
+def normalize_dynocard_df(df):
+    col_map = {
+        "Surface rod load Position": "Position",
+        "Surface rod load": "Load",
+        "Downhole pump load position": "Position",
+        "Downhole pump load": "Load"
+    }
+    df = df.rename(columns=col_map)
+    if "Position" in df.columns and "Load" in df.columns:
+        return df[["Position", "Load"]].dropna()
+    else:
+        raise ValueError("Dynacard must contain 'Position' and 'Load' columns")
 
 # --- Diagnostics Rules ---
 def detect_issue_patterns(df: pd.DataFrame):
@@ -62,24 +76,23 @@ def extract_features(df: pd.DataFrame):
     })
 
 def ml_predict_issue(df: pd.DataFrame):
+    model_path = os.path.join(os.path.dirname(__file__), "ml_model.pkl")
+    model = joblib.load(model_path)
     features = extract_features(df)
-    model = joblib.load("ml_model.pkl")  # Pretrained model
     preds = model.predict(features)
     probs = model.predict_proba(features)
     return preds[0], float(np.max(probs))
 
 # --- Efficiency & Rod String Analysis ---
 def calculate_efficiency_metrics(fillage, stroke_length, spm):
-    ideal_fill = 100
-    volumetric_eff = fillage / ideal_fill
+    volumetric_eff = fillage / 100
     system_eff = volumetric_eff * (stroke_length * spm) / 100
     return {"volumetric_eff": volumetric_eff, "system_eff": system_eff}
 
 def parse_rod_string(rod_string):
-    pattern = r"(\d+\.\d+)x(\d+)"
-    rods = re.findall(pattern, rod_string)
-    parsed = [(float(dia), int(length)) for dia, length in rods]
-    total_weight = sum(dia**2 * length * 0.1 for dia, length in parsed)
+    rods = re.findall(r"(\d+\.\d+)x(\d+)", rod_string)
+    parsed = [(float(d), int(l)) for d, l in rods]
+    total_weight = sum(d**2 * l * 0.1 for d, l in parsed)
     return {"rod_config": parsed, "rod_total_weight": total_weight}
 
 # --- Optimizer ---
@@ -106,13 +119,14 @@ def generate_dyno_card(stroke_length, rod_weight):
 
 # --- File I/O ---
 def parse_excel(file: UploadFile):
-    return pd.read_excel(file.file)
+    df = pd.read_excel(file.file)
+    return normalize_dynocard_df(df)
 
 def generate_csv(data: dict, filename: str):
     df = pd.DataFrame([data])
-    csv_path = os.path.join(EXPORT_DIR, filename)
-    df.to_csv(csv_path, index=False)
-    return csv_path
+    path = os.path.join(EXPORT_DIR, filename)
+    df.to_csv(path, index=False)
+    return path
 
 def generate_dyno_chart(df: pd.DataFrame, filename: str):
     fig, ax = plt.subplots()
@@ -120,10 +134,10 @@ def generate_dyno_chart(df: pd.DataFrame, filename: str):
     ax.set_title("Dyno Card")
     ax.set_xlabel("Position")
     ax.set_ylabel("Load")
-    chart_path = os.path.join(EXPORT_DIR, filename)
-    fig.savefig(chart_path)
+    path = os.path.join(EXPORT_DIR, filename)
+    fig.savefig(path)
     plt.close(fig)
-    return chart_path
+    return path
 
 def generate_pdf(metrics: dict, chart_path: str, issues: list, suggestions: list, filename: str):
     pdf = FPDF()
@@ -139,9 +153,9 @@ def generate_pdf(metrics: dict, chart_path: str, issues: list, suggestions: list
     for s in suggestions:
         pdf.cell(200, 10, txt=f"- {s}", ln=True)
     pdf.image(chart_path, x=10, y=120, w=180)
-    pdf_path = os.path.join(EXPORT_DIR, filename)
-    pdf.output(pdf_path)
-    return pdf_path
+    path = os.path.join(EXPORT_DIR, filename)
+    pdf.output(path)
+    return path
 
 # --- API ---
 @app.post("/api/calculate")
@@ -170,7 +184,6 @@ async def calculate(
 
     suggestions = suggest_optimization(stroke_length, spm, rod_weight, base_metrics["fillage"])
 
-    # Save outputs
     generate_csv(all_metrics, "metrics.csv")
     chart_path = generate_dyno_chart(sim_dyno_df, "dyno_chart.png")
     generate_pdf(all_metrics, chart_path, issues, suggestions, "report.pdf")
@@ -182,7 +195,7 @@ def export():
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zipf:
         for fname in ["metrics.csv", "report.pdf", "dyno_chart.png"]:
-            fpath = os.path.join(EXPORT_DIR, fname)
-            zipf.write(fpath, arcname=fname)
+            path = os.path.join(EXPORT_DIR, fname)
+            zipf.write(path, arcname=fname)
     zip_buf.seek(0)
     return FileResponse(zip_buf, media_type='application/zip', filename='report.zip')
