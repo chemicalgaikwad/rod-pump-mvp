@@ -12,7 +12,6 @@ import zipfile
 import os
 from fpdf import FPDF
 import re
-import joblib
 from sklearn.ensemble import RandomForestClassifier
 
 app = FastAPI()
@@ -26,6 +25,28 @@ app.add_middleware(
 
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
+
+# --- ML Model Initialization ---
+def create_mock_model():
+    np.random.seed(42)
+    X = pd.DataFrame({
+        "load_mean": np.random.uniform(100, 400, 100),
+        "load_std": np.random.uniform(10, 100, 100),
+        "load_max": np.random.uniform(200, 800, 100),
+        "load_min": np.random.uniform(0, 100, 100),
+        "position_range": np.random.uniform(50, 120, 100),
+        "diff_mean": np.random.uniform(5, 80, 100)
+    })
+    y = np.random.choice([
+        "Gas Interference", "Tubing Leak", "Vibration Interference",
+        "Insufficient Inflow", "Flowing with Pumping", "Gas Locking",
+        "Traveling Valve Leaking", "Heavy Oil Interference", "Sand Interference"
+    ], 100)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    return model
+
+ml_model = create_mock_model()
 
 # --- Column Mapping Logic ---
 def normalize_dynocard_df(df):
@@ -76,11 +97,9 @@ def extract_features(df: pd.DataFrame):
     })
 
 def ml_predict_issue(df: pd.DataFrame):
-    model_path = os.path.join(os.path.dirname(__file__), "ml_model.pkl")
-    model = joblib.load(model_path)
     features = extract_features(df)
-    preds = model.predict(features)
-    probs = model.predict_proba(features)
+    preds = ml_model.predict(features)
+    probs = ml_model.predict_proba(features)
     return preds[0], float(np.max(probs))
 
 # --- Efficiency & Rod String Analysis ---
