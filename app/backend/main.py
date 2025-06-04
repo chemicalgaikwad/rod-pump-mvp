@@ -168,19 +168,44 @@ def generate_pdf(metrics: dict, chart_paths: list, issues: list, suggestions: li
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
+
+    # Section: Pump Metrics
+    pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Pump Metrics", ln=True)
+    pdf.set_font("Arial", size=12)
     for k, v in metrics.items():
         pdf.cell(200, 10, txt=f"{k}: {v:.2f}%" if k == 'volumetric_eff' else (f"{k}: {v:.2f}" if isinstance(v, (int, float)) else f"{k}: {v}"), ln=True)
-    pdf.cell(200, 10, txt="\nDetected Issues:", ln=True)
-    for issue in issues:
-        pdf.cell(200, 10, txt=f"- {issue}", ln=True)
-    pdf.cell(200, 10, txt="\nOptimization Suggestions:", ln=True)
-    for s in suggestions:
-        pdf.cell(200, 10, txt=f"- {s}", ln=True)
+
+    # Section: Detected Issues
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Detected Pump Issues", ln=True)
+    pdf.set_font("Arial", size=12)
+    if issues:
+        for issue in issues:
+            pdf.cell(200, 10, txt=f"- {issue}", ln=True)
+    else:
+        pdf.cell(200, 10, txt="None detected", ln=True)
+
+    # Section: Optimization Suggestions
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Optimization Suggestions", ln=True)
+    pdf.set_font("Arial", size=12)
+    if suggestions:
+        for s in suggestions:
+            pdf.cell(200, 10, txt=f"- {s}", ln=True)
+    else:
+        pdf.cell(200, 10, txt="None recommended", ln=True)
+
+    # Section: Dynocard Charts
     for i, chart_path in enumerate(chart_paths):
-        if i > 0:
-            pdf.add_page()
-        pdf.image(chart_path, x=10, y=40, w=180)
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 14)
+        title = os.path.splitext(os.path.basename(chart_path))[0].replace('_', ' ').title()
+        pdf.cell(200, 10, txt=title, ln=True)
+        pdf.image(chart_path, x=10, y=30, w=180)
+
     path = os.path.join(EXPORT_DIR, filename)
     pdf.output(path)
     return path
