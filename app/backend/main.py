@@ -1,7 +1,7 @@
 #File: app/backend/main.py
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from typing import Optional
 from pydantic import BaseModel
 import numpy as np
@@ -217,4 +217,5 @@ def export():
             path = os.path.join(EXPORT_DIR, fname)
             zipf.write(path, arcname=fname)
     zip_buf.seek(0)
-    return FileResponse(zip_buf, media_type='application/zip', filename='report.zip')
+    zip_buf.seek(0)
+    return StreamingResponse(zip_buf, media_type='application/zip', headers={"Content-Disposition": "attachment; filename=report.zip"})
