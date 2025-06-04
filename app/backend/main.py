@@ -196,7 +196,7 @@ async def calculate(
     rod_info = parse_rod_string(rod_string)
     all_metrics = {**base_metrics, **efficiency, **rod_info}
 
-    sim_dyno_df = generate_dyno_card(stroke_length, rod_weight)
+    sim_dyno_df = downhole_df
     issues = detect_issue_patterns(downhole_df)
     ml_issue, ml_conf = ml_predict_issue(downhole_df)
     issues.append(f"ML Suggests: {ml_issue} ({ml_conf * 100:.1f}% confidence)")
