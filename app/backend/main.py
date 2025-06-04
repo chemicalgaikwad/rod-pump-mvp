@@ -164,7 +164,7 @@ def generate_pdf(metrics: dict, chart_path: str, issues: list, suggestions: list
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt="Pump Metrics", ln=True)
     for k, v in metrics.items():
-        pdf.cell(200, 10, txt=f"{k}: {v:.2f}", ln=True)
+        pdf.cell(200, 10, txt=f"{k}: {v:.2f}" if isinstance(v, (int, float)) else f"{k}: {v}", ln=True)
     pdf.cell(200, 10, txt="\nDetected Issues:", ln=True)
     for issue in issues:
         pdf.cell(200, 10, txt=f"- {issue}", ln=True)
