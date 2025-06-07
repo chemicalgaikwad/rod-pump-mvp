@@ -164,6 +164,11 @@ def generate_dyno_chart_combined(surface_df: pd.DataFrame, downhole_df: pd.DataF
 
     # Surface chart
     axs[0].plot(surface_df["Position"], surface_df["Load"], color='blue')
+    # Highlight suspected regions in surface chart
+    surf_threshold = surface_df["Load"].mean() - 150
+    surf_suspect = surface_df[surface_df["Load"].diff() < surf_threshold]
+    for i in surf_suspect.index:
+        axs[0].axvline(x=surface_df.loc[i, "Position"], color='purple', linestyle=':', alpha=0.7)
     axs[0].set_title("Surface Dyno Card")
     axs[0].set_xlabel("Position")
     axs[0].set_ylabel("Load")
@@ -171,6 +176,12 @@ def generate_dyno_chart_combined(surface_df: pd.DataFrame, downhole_df: pd.DataF
 
     # Downhole chart with fluid load lines
     axs[1].plot(downhole_df["Position"], downhole_df["Load"], color='orange')
+
+    # Highlight suspected regions
+    threshold = downhole_df["Load"].mean() - 150  # Arbitrary logic for drop detection
+    suspect = downhole_df[downhole_df["Load"].diff() < threshold]
+    for i in suspect.index:
+        axs[1].axvline(x=downhole_df.loc[i, "Position"], color='purple', linestyle=':', alpha=0.7)
     axs[1].set_title("Downhole Dyno Card")
     axs[1].set_xlabel("Position")
     axs[1].set_ylabel("Load")
@@ -264,7 +275,8 @@ def generate_pdf(metrics: dict, chart_paths: list, issues: list, suggestions: li
 @app.post("/api/calculate")
 async def calculate(
     spm: float = Form(...),
-    rod_weight: float = Form(...),
+    # rod_weight removed from input
+    # rod_weight: float = Form(...),
     pump_depth: float = Form(...),
     fluid_level: Optional[float] = Form(None),
     rod_string: str = Form(...),
@@ -274,6 +286,8 @@ async def calculate(
     surface_df = parse_excel(surface_card_file)
     downhole_df = parse_excel(downhole_card_file)
 
+    # rod_info already calculated above
+    rod_weight = rod_info["rod_total_weight"]
     base_metrics = calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df)
     efficiency = calculate_efficiency_metrics(base_metrics["fillage"])
     rod_info = parse_rod_string(rod_string)
