@@ -104,11 +104,27 @@ def ml_predict_issue(df: pd.DataFrame):
 
 # --- Dyno Metrics ---
 def calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df):
-    stroke_length = surface_df["Position"].max() - surface_df["Position"].min()
+    normalized_range = surface_df["Position"].max() - surface_df["Position"].min()
+    # Infer actual stroke length dynamically from metadata (assuming Position is normalized 0–1 or 0–100%)
+    # Common convention: normalized range of 1 → 100% stroke
+    # We'll scale it to 75 inches if normalized range is close to 1
+    if 0.9 <= normalized_range <= 1.1:
+        stroke_length = 75
+    elif 99 <= normalized_range <= 101:
+        stroke_length = 75
+        surface_df["Position"] /= 100
+        downhole_df["Position"] /= 100
+    else:
+        stroke_length = normalized_range  # Assume position was in inches already
+
+    surface_df["Position"] *= stroke_length / normalized_range
+    downhole_df["Position"] *= stroke_length / normalized_range
     prhp = (rod_weight * stroke_length * spm) / 33000
     load_range = downhole_df["Load"].max() - downhole_df["Load"].min()
     fillage = min((load_range / rod_weight) * 100, 100) if rod_weight else 0
-    return {"stroke_length": stroke_length, "prhp": prhp, "fillage": fillage}
+    fluid_load = downhole_df["Load"].mean()
+    max_fluid_load = downhole_df["Load"].max()
+    return {"stroke_length": stroke_length, "prhp": prhp, "fillage": fillage, "fluid_load": fluid_load, "max_fluid_load": max_fluid_load}
 
 # --- Efficiency & Rod String Analysis ---
 def calculate_efficiency_metrics(fillage):
@@ -146,17 +162,26 @@ def generate_csv(data: dict, filename: str):
 def generate_dyno_chart_combined(surface_df: pd.DataFrame, downhole_df: pd.DataFrame, filename: str):
     fig, axs = plt.subplots(2, 1, figsize=(6, 8))
 
+    # Surface chart
     axs[0].plot(surface_df["Position"], surface_df["Load"], color='blue')
     axs[0].set_title("Surface Dyno Card")
     axs[0].set_xlabel("Position")
     axs[0].set_ylabel("Load")
     axs[0].grid(True)
 
+    # Downhole chart with fluid load lines
     axs[1].plot(downhole_df["Position"], downhole_df["Load"], color='orange')
     axs[1].set_title("Downhole Dyno Card")
     axs[1].set_xlabel("Position")
     axs[1].set_ylabel("Load")
     axs[1].grid(True)
+
+    # Calculate and annotate fluid load
+    fluid_load = downhole_df["Load"].mean()
+    max_fluid_load = downhole_df["Load"].max()
+    axs[1].axhline(fluid_load, color='green', linestyle='--', label=f"Fluid Load: {fluid_load:.1f}")
+    axs[1].axhline(max_fluid_load, color='red', linestyle='--', label=f"Max Fluid Load: {max_fluid_load:.1f}")
+    axs[1].legend()
 
     plt.tight_layout()
     path = os.path.join(EXPORT_DIR, filename)
@@ -174,7 +199,7 @@ def generate_pdf(metrics: dict, chart_paths: list, issues: list, suggestions: li
     pdf.cell(200, 10, txt="Pump Metrics", ln=True)
     pdf.set_font("Arial", size=12)
     for k, v in metrics.items():
-        pdf.cell(200, 10, txt=f"{k}: {v:.2f}%" if k == 'volumetric_eff' else (f"{k}: {v:.2f}" if isinstance(v, (int, float)) else f"{k}: {v}"), ln=True)
+        pdf.cell(200, 10, txt=f"{k}: {v:.2f}%" if k in ['volumetric_eff'] else (f"{k}: {v:.2f}" if isinstance(v, (int, float)) else f"{k}: {v}"), ln=True)
 
     # Section: Detected Issues
     pdf.ln(5)
