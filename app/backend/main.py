@@ -223,7 +223,32 @@ def generate_pdf(metrics: dict, chart_paths: list, issues: list, suggestions: li
     else:
         pdf.cell(200, 10, txt="None recommended", ln=True)
 
-    # Section: Dynocard Charts
+    # Section: Diagnosis Reasoning
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Diagnosis Reasoning", ln=True)
+    pdf.set_font("Arial", size=12)
+    for issue in issues:
+        if "Insufficient Inflow" in issue:
+            pdf.cell(200, 10, txt="- Insufficient Inflow: Pump stroke not fully utilized, likely due to low reservoir inflow.", ln=True)
+        elif "Gas Locking" in issue:
+            pdf.cell(200, 10, txt="- Gas Locking: Load rise pattern suggests trapped gas preventing full fluid entry.", ln=True)
+        elif "Heavy Oil Interference" in issue:
+            pdf.cell(200, 10, txt="- Heavy Oil Interference: High sustained load implies viscous resistance.", ln=True)
+        elif "Sand Interference" in issue:
+            pdf.cell(200, 10, txt="- Sand Interference: Sudden sharp downstroke drops indicate plunger drag or sand.", ln=True)
+        elif "Gas Interference" in issue:
+            pdf.cell(200, 10, txt="- Gas Interference: Load never rises high enough, may be mostly gas pumped.", ln=True)
+        elif "Traveling Valve Leaking" in issue:
+            pdf.cell(200, 10, txt="- Traveling Valve Leaking: Minimal change in load during cycle.", ln=True)
+        elif "Tubing Leak" in issue:
+            pdf.cell(200, 10, txt="- Tubing Leak: Low stroke efficiency, high minimum load.", ln=True)
+        elif "Vibration Interference" in issue:
+            pdf.cell(200, 10, txt="- Vibration Interference: Load variation unusually high, may indicate rod vibration.", ln=True)
+        elif "Flowing with Pumping" in issue:
+            pdf.cell(200, 10, txt="- Flowing with Pumping: Load profile flat and consistent, flow through pump.", ln=True)
+        elif "ML Suggests" in issue:
+            pdf.cell(200, 10, txt=f"- {issue}", ln=True)
     for i, chart_path in enumerate(chart_paths):
         pdf.add_page()
         pdf.set_font("Arial", 'B', 14)
