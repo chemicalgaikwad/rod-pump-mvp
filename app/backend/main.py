@@ -286,11 +286,10 @@ async def calculate(
     surface_df = parse_excel(surface_card_file)
     downhole_df = parse_excel(downhole_card_file)
 
-    # rod_info already calculated above
+    rod_info = parse_rod_string(rod_string)
     rod_weight = rod_info["rod_total_weight"]
     base_metrics = calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df)
     efficiency = calculate_efficiency_metrics(base_metrics["fillage"])
-    rod_info = parse_rod_string(rod_string)
     suggestions, recommended_stroke = suggest_optimization(base_metrics["stroke_length"], spm, rod_weight, base_metrics["fillage"])
     
     all_metrics = {**base_metrics, **efficiency, **rod_info, "recommended_stroke_length": recommended_stroke}
