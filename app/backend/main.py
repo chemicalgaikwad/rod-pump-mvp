@@ -11,6 +11,7 @@ import io
 import zipfile
 import os
 from fpdf import FPDF
+from math import pi
 import re
 from sklearn.ensemble import RandomForestClassifier
 
@@ -103,7 +104,7 @@ def ml_predict_issue(df: pd.DataFrame):
     return preds[0], float(np.max(probs))
 
 # --- Dyno Metrics ---
-def calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df):
+def calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df, plunger_diameter=1.5, fluid_sg=0.85):
     normalized_range = surface_df["Position"].max() - surface_df["Position"].min()
     # Infer actual stroke length dynamically from metadata (assuming Position is normalized 0–1 or 0–100%)
     # Common convention: normalized range of 1 → 100% stroke
@@ -124,7 +125,15 @@ def calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surf
     fillage = min((load_range / rod_weight) * 100, 100) if rod_weight else 0
     fluid_load = downhole_df["Load"].mean()
     max_fluid_load = downhole_df["Load"].max()
-    return {"stroke_length": stroke_length, "prhp": prhp, "fillage": fillage, "fluid_load": fluid_load, "max_fluid_load": max_fluid_load}
+    
+    # Effective plunger stroke calculation
+    plunger_area = pi * (plunger_diameter / 2) ** 2
+    effective_stroke = stroke_length * fillage / 100
+    pump_displacement = plunger_area * effective_stroke * spm  # volume per minute
+
+    # Fluid load calculation (ideal theoretical load)
+    fluid_load_calc = plunger_area * fluid_sg * 62.4 * pump_depth  # lbf
+    return {"stroke_length": stroke_length, "prhp": prhp, "fillage": fillage, "fluid_load": fluid_load, "max_fluid_load": max_fluid_load, "pump_displacement": pump_displacement, "fluid_load_calc": fluid_load_calc}
 
 # --- Efficiency & Rod String Analysis ---
 def calculate_efficiency_metrics(fillage):
@@ -193,6 +202,10 @@ def generate_dyno_chart_combined(surface_df: pd.DataFrame, downhole_df: pd.DataF
     axs[1].axhline(fluid_load, color='green', linestyle='--', label=f"Fluid Load: {fluid_load:.1f}")
     axs[1].axhline(max_fluid_load, color='red', linestyle='--', label=f"Max Fluid Load: {max_fluid_load:.1f}")
     axs[1].legend()
+
+    # Stress limits overlay example (placeholder)
+    axs[0].axhline(y=8000, color='red', linestyle='--', label='Rod Load Limit')
+    axs[0].legend()
 
     plt.tight_layout()
     path = os.path.join(EXPORT_DIR, filename)
@@ -286,10 +299,11 @@ async def calculate(
     surface_df = parse_excel(surface_card_file)
     downhole_df = parse_excel(downhole_card_file)
 
-    rod_info = parse_rod_string(rod_string)
+    # rod_info already calculated above
     rod_weight = rod_info["rod_total_weight"]
     base_metrics = calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df)
     efficiency = calculate_efficiency_metrics(base_metrics["fillage"])
+    rod_info = parse_rod_string(rod_string)
     suggestions, recommended_stroke = suggest_optimization(base_metrics["stroke_length"], spm, rod_weight, base_metrics["fillage"])
     
     all_metrics = {**base_metrics, **efficiency, **rod_info, "recommended_stroke_length": recommended_stroke}
