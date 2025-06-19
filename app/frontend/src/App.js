@@ -1,92 +1,61 @@
+// File: app/frontend/src/App.js
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const API_URL = 'https://rod-pump-mvp.onrender.com/api/calculate'; // Backend API endpoint
-const EXPORT_URL = 'https://rod-pump-mvp.onrender.com/api/export'; // Report download URL
-
 function App() {
-  const [spm, setSpm] = useState('');
-  const [pumpDepth, setPumpDepth] = useState('');
-  const [rodString, setRodString] = useState('');
-  const [plungerDiameter, setPlungerDiameter] = useState('1.5');
-  const [fluidSG, setFluidSG] = useState('0.85');
-  const [surfaceFile, setSurfaceFile] = useState(null);
-  const [downholeFile, setDownholeFile] = useState(null);
+  const [formData, setFormData] = useState({
+    spm: '',
+    rod_weight: '',
+    pump_depth: '',
+    fluid_level: '',
+    rod_string: '',
+    surface_card_file: null,
+    downhole_card_file: null
+  });
   const [result, setResult] = useState(null);
-  const [error, setError] = useState('');
+
+  const handleChange = (e) => {
+    const { name, value, files } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: files ? files[0] : value
+    }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!surfaceFile || !downholeFile) {
-      setError('Please upload both Surface and Downhole Dynacard Excel files.');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('spm', spm);
-    formData.append('pump_depth', pumpDepth);
-    formData.append('rod_string', rodString);
-    formData.append('plunger_diameter', plungerDiameter);
-    formData.append('fluid_sg', fluidSG);
-    formData.append('surface_card_file', surfaceFile);
-    formData.append('downhole_card_file', downholeFile);
+    const data = new FormData();
+    Object.keys(formData).forEach(key => {
+      data.append(key, formData[key]);
+    });
 
     try {
-      const response = await axios.post(API_URL, formData);
-      setResult(response.data);
-      setError('');
-    } catch (err) {
-      setError('Error during calculation: ' + err.message);
-      setResult(null);
+      const res = await axios.post('https://rod-pump-mvp.onrender.com/api/calculate', data);
+      setResult(res.data);
+    } catch (error) {
+      alert('Error during calculation: ' + error.message);
     }
-  };
-
-  const handleDownload = () => {
-    window.open(EXPORT_URL, '_blank');
   };
 
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-      <h2>Rod Pump Performance Analyzer</h2>
+    <div style={{ padding: '20px' }}>
+      <h2>Rod Pump Dynacard Analyzer</h2>
       <form onSubmit={handleSubmit}>
-        <div>
-          <label>SPM:</label>
-          <input type="number" value={spm} onChange={(e) => setSpm(e.target.value)} required />
-        </div>
-        <div>
-          <label>Pump Depth (m):</label>
-          <input type="number" value={pumpDepth} onChange={(e) => setPumpDepth(e.target.value)} required />
-        </div>
-        <div>
-          <label>Rod String (e.g., 1.125x1000,0.875x1500):</label>
-          <input type="text" value={rodString} onChange={(e) => setRodString(e.target.value)} required />
-        </div>
-        <div>
-          <label>Plunger Diameter (in):</label>
-          <input type="number" value={plungerDiameter} onChange={(e) => setPlungerDiameter(e.target.value)} />
-        </div>
-        <div>
-          <label>Fluid Specific Gravity:</label>
-          <input type="number" step="0.01" value={fluidSG} onChange={(e) => setFluidSG(e.target.value)} />
-        </div>
-        <div>
-          <label>Surface Dynacard Excel:</label>
-          <input type="file" onChange={(e) => setSurfaceFile(e.target.files[0])} required />
-        </div>
-        <div>
-          <label>Downhole Dynacard Excel:</label>
-          <input type="file" onChange={(e) => setDownholeFile(e.target.files[0])} required />
-        </div>
+        <input type="number" name="spm" placeholder="SPM" onChange={handleChange} required /><br />
+        <input type="number" name="rod_weight" placeholder="Rod Weight (lbs)" onChange={handleChange} required /><br />
+        <input type="number" name="pump_depth" placeholder="Pump Depth (ft)" onChange={handleChange} required /><br />
+        <input type="number" name="fluid_level" placeholder="Fluid Level (ft)" onChange={handleChange} required /><br />
+        <input type="text" name="rod_string" placeholder="Rod String (e.g. 1.0x1000,0.875x2000)" onChange={handleChange} required /><br />
+        <input type="file" name="surface_card_file" onChange={handleChange} required /><br />
+        <input type="file" name="downhole_card_file" onChange={handleChange} required /><br />
         <button type="submit">Calculate</button>
       </form>
-
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-
       {result && (
-        <div style={{ marginTop: '20px' }}>
+        <div>
           <h3>Results:</h3>
           <pre>{JSON.stringify(result, null, 2)}</pre>
-          <button onClick={handleDownload}>Download Report (CSV, PDF, Images)</button>
+          {result.dynocard_image && <img src={result.dynocard_image} alt="Dynocard" width="500" />}
+          {result.report_path && <a href={result.report_path} target="_blank" rel="noopener noreferrer">Download Report PDF</a>}
         </div>
       )}
     </div>
