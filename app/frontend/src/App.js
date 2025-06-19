@@ -1,4 +1,3 @@
-// File: app/frontend/src/App.js
 import React, { useState } from 'react';
 import axios from 'axios';
 
@@ -30,7 +29,7 @@ function App() {
     });
 
     try {
-      const res = await axios.post('https://rod-pump-mvp.onrender.com/api/calculate', data);
+      const res = await axios.post('/api/calculate', data); // ✅ Using relative path
       setResult(res.data);
     } catch (error) {
       alert('Error during calculation: ' + error.message);
