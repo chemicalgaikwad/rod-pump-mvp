@@ -29,7 +29,7 @@ function App() {
     });
 
     try {
-      const res = await axios.post('/api/calculate', data); // ✅ Using relative path
+      const res = await axios.post('https://rod-pump-mvp.onrender.com/calculate', data); // ✅ Using relative path
       setResult(res.data);
     } catch (error) {
       alert('Error during calculation: ' + error.message);
