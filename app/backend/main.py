@@ -1,138 +1,142 @@
-#File: app/backend/main.py
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from typing import Optional
-from pydantic import BaseModel
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import io
-import zipfile
 import os
-from fpdf import FPDF
-from math import pi
-import re
-from scipy.stats import skew, kurtosis
-from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import joblib
+import uuid
+import shutil
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-EXPORT_DIR = "exports"
-os.makedirs(EXPORT_DIR, exist_ok=True)
+UPLOAD_DIR = "uploads"
+REPORTS_DIR = "reports"
+IMAGES_DIR = "images"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs(IMAGES_DIR, exist_ok=True)
 
-# Additional calculations
-def calculate_effective_stroke(stroke_length, fillage):
-    return stroke_length * fillage
+ml_model = joblib.load("app/backend/ml_model.pkl")
 
-def recommend_optimized_stroke(stroke_length, fillage):
-    if fillage < 0.85:
-        return stroke_length * fillage  # Reduce stroke if fillage low
-    return stroke_length
+def read_dynacard(file: UploadFile):
+    df = pd.read_excel(file.file)
+    df.columns = df.columns.str.strip()
+    return df
 
-def recommend_optimized_spm(spm, fillage, target_fillage=0.85):
-    return spm * (target_fillage / fillage) if fillage != 0 else spm
+def calculate_metrics(surf_df, down_df, pump_depth):
+    stroke_len = surf_df["Position"].max() - surf_df["Position"].min()
+    max_load = surf_df["Load"].max()
+    min_load = surf_df["Load"].min()
+    fillage = down_df["Load"].idxmin() / len(down_df)
+    pump_eff = fillage * 100
+    return stroke_len, max_load, min_load, fillage, pump_eff
 
-def calculate_statistical_metrics(df):
-    load = df["Load"]
-    return {
-        "load_skewness": skew(load),
-        "load_kurtosis": kurtosis(load),
-        "load_stddev": load.std(),
-        "load_mean": load.mean()
+def ml_predict(stroke_len, max_load, min_load, fillage, pump_depth):
+    df = pd.DataFrame([{
+        "max_load": max_load,
+        "min_load": min_load,
+        "stroke_length": stroke_len,
+        "pump_fillage": fillage,
+        "pump_depth": pump_depth
+    }])
+    prediction = ml_model.predict(df)[0]
+    confidence = max(ml_model.predict_proba(df)[0])
+    return prediction, confidence
+
+def generate_plot(df, title, file_path):
+    plt.figure()
+    plt.plot(df["Position"], df["Load"])
+    plt.title(title)
+    plt.xlabel("Position")
+    plt.ylabel("Load")
+    plt.grid(True)
+    plt.savefig(file_path)
+    plt.close()
+
+def create_pdf(report_path, metrics, prediction, confidence, image_paths):
+    c = canvas.Canvas(report_path, pagesize=letter)
+    width, height = letter
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(30, height - 40, "Rod Pump Dynacard Report")
+
+    c.setFont("Helvetica", 12)
+    y = height - 70
+    for label, value in metrics.items():
+        c.drawString(30, y, f"{label}: {value}")
+        y -= 20
+
+    c.drawString(30, y - 10, f"ML Predicted Issue: {prediction} ({confidence*100:.1f}% confidence)")
+
+    for path in image_paths:
+        y -= 240
+        c.drawImage(path, 30, y, width=500, preserveAspectRatio=True)
+
+    c.save()
+
+@app.post("/api/calculate")
+async def calculate(
+    spm: int = Form(...),
+    rod_weight: float = Form(...),
+    pump_depth: float = Form(...),
+    fluid_level: float = Form(...),
+    rod_string: str = Form(...),
+    surface_card_file: UploadFile = File(...),
+    downhole_card_file: UploadFile = File(...),
+):
+    surf_df = read_dynacard(surface_card_file)
+    down_df = read_dynacard(downhole_card_file)
+
+    stroke_len, max_load, min_load, fillage, pump_eff = calculate_metrics(surf_df, down_df, pump_depth)
+    prediction, confidence = ml_predict(stroke_len, max_load, min_load, fillage, pump_depth)
+
+    uid = str(uuid.uuid4())
+    surface_plot_path = os.path.join(IMAGES_DIR, f"surface_{uid}.png")
+    downhole_plot_path = os.path.join(IMAGES_DIR, f"downhole_{uid}.png")
+    generate_plot(surf_df, "Surface Dynacard", surface_plot_path)
+    generate_plot(down_df, "Downhole Dynacard", downhole_plot_path)
+
+    report_path = os.path.join(REPORTS_DIR, f"report_{uid}.pdf")
+    metrics = {
+        "SPM": spm,
+        "Rod Weight (lbs)": rod_weight,
+        "Pump Depth (ft)": pump_depth,
+        "Fluid Level (ft)": fluid_level,
+        "Rod String": rod_string,
+        "Effective Stroke Length (in)": round(stroke_len, 2),
+        "Pump Fillage": f"{fillage:.2f}",
+        "Pump Efficiency (%)": f"{pump_eff:.2f}"
     }
+    create_pdf(report_path, metrics, prediction, confidence, [surface_plot_path, downhole_plot_path])
 
-# Dummy realistic function implementations
-async def parse_excel(file):
-    contents = await file.read()
-    return pd.read_excel(io.BytesIO(contents))
-
-def parse_rod_string(rod_string):
-    pattern = r"(\d+\.\d+)x(\d+)"
-    matches = re.findall(pattern, rod_string)
-    total_weight = 0
-    for diameter, count in matches:
-        diameter = float(diameter)
-        count = int(count)
-        weight_per_ft = (diameter ** 2) * 0.785 * 490  # Approximate
-        total_weight += weight_per_ft * count * 30  # 30ft assumed length
-    return {"rod_total_weight": total_weight}
-
-def calculate_metrics(spm, rod_weight, pump_depth, fluid_level, rod_string, surface_df, downhole_df, plunger_diameter=1.5, fluid_sg=0.8):
-    stroke_length = surface_df["Position"].max()
-    fillage = min(fluid_level / pump_depth, 1.0) if fluid_level else 1.0
-    prhp = 144 * 0.433 * fluid_sg * fluid_level  # psi
-    volumetric_eff = fillage
-    system_eff = volumetric_eff * 0.8
     return {
-        "stroke_length": stroke_length,
+        "stroke_length": stroke_len,
+        "max_load": max_load,
+        "min_load": min_load,
         "fillage": fillage,
-        "prhp": prhp,
-        "volumetric_eff": volumetric_eff,
-        "system_eff": system_eff,
+        "pump_efficiency": pump_eff,
+        "ml_prediction": prediction,
+        "confidence": confidence,
+        "report_path": f"/reports/report_{uid}.pdf",
+        "dynocard_image": f"/images/surface_{uid}.png"
     }
 
-def calculate_efficiency_metrics(fillage):
-    pump_efficiency = fillage * 100
-    return {"pump_efficiency": pump_efficiency}
+@app.get("/reports/{file_name}")
+def get_report(file_name: str):
+    return FileResponse(path=os.path.join(REPORTS_DIR, file_name))
 
-def generate_csv(metrics, filename):
-    df = pd.DataFrame([metrics])
-    df.to_csv(os.path.join(EXPORT_DIR, filename), index=False)
-
-def generate_dyno_chart_combined(surface_df, downhole_df, path, fluid_load, max_fluid_load):
-    plt.figure(figsize=(8,6))
-    plt.subplot(2,1,1)
-    plt.plot(surface_df["Position"], surface_df["Load"], label="Surface")
-    plt.axhline(y=fluid_load, color='r', linestyle='--', label='Fluid Load')
-    plt.axhline(y=max_fluid_load, color='g', linestyle='--', label='Max Fluid Load')
-    plt.title("Surface Dynacard")
-    plt.grid(True)
-    plt.legend()
-
-    plt.subplot(2,1,2)
-    plt.plot(downhole_df["Position"], downhole_df["Load"], label="Downhole", color='orange')
-    plt.axhline(y=fluid_load, color='r', linestyle='--', label='Fluid Load')
-    plt.axhline(y=max_fluid_load, color='g', linestyle='--', label='Max Fluid Load')
-    plt.title("Downhole Dynacard")
-    plt.grid(True)
-    plt.legend()
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(EXPORT_DIR, path))
-    return os.path.join(EXPORT_DIR, path)
-
-def detect_issue_patterns(df):
-    load = df["Load"]
-    issues = []
-    if load.max() < 5000: issues.append("Insufficient Inflow")
-    if load.min() < -2000: issues.append("Gas Locking")
-    if load.std() > 3000: issues.append("Sand Interference")
-    return issues
-
-def ml_predict_issue(df):
-    model = joblib.load("app/backend/ml_model.pkl")
-    features = [df["Load"].mean(), df["Load"].std()]
-    pred = model.predict([features])[0]
-    prob = max(model.predict_proba([features])[0])
-    return str(pred), float(prob)
-
-def suggest_optimization(stroke_length, spm, rod_weight, fillage):
-    suggestions = []
-    if fillage < 0.8:
-        suggestions.append("Increase SPM or reduce stroke.")
-    elif fillage > 0.95:
-        suggestions.append("Possible energy waste. Reduce SPM.")
-    return suggestions, stroke_length * fillage
-
-# The rest remains unchanged as per your code including generate_pdf etc.
-
-# Your FastAPI route and pdf generation already handle this output.
+@app.get("/images/{file_name}")
+def get_image(file_name: str):
+    return FileResponse(path=os.path.join(IMAGES_DIR, file_name))
